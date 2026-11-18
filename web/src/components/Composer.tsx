@@ -64,7 +64,7 @@ export function Composer({ busy, onSend, onStop, focusKey }: Props) {
             onClick={submit}
             disabled={!text.trim()}
             aria-label="Send"
-            className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-accent text-white transition-[transform,opacity] active:scale-95 disabled:opacity-30"
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-accent text-on-accent transition-[transform,opacity] active:scale-95 disabled:opacity-30"
           >
             <IconArrowUp />
           </button>

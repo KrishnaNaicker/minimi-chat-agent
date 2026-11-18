@@ -32,7 +32,7 @@ export function SetupScreen({ onRetry }: { onRetry: () => void }) {
             </span>
           </li>
         </ol>
-        <button onClick={onRetry} className="mt-6 w-full rounded-xl bg-accent py-2.5 text-[14px] font-medium text-white transition-transform active:scale-[0.99]">
+        <button onClick={onRetry} className="mt-6 w-full rounded-xl bg-accent py-2.5 text-[14px] font-medium text-on-accent transition-transform active:scale-[0.99]">
           Check again
         </button>
       </div>
