@@ -152,6 +152,7 @@ async function runAnswer(args: TurnArgs & { history: ChatMessage[] }, emit: Emit
   let answer = '';
   let cachedTokens = 0;
   const searches: string[] = [];
+  const queryById = new Map<string, string>(); // server tool_use id → query, to label result chips
   const results = new Map<string, { title: string; pageAge: string | null }>();
   const cited = new Map<string, Source>(); // url → numbered source, in citation order
   const retrievedAt = new Date().toISOString();
@@ -216,7 +217,8 @@ async function runAnswer(args: TurnArgs & { history: ChatMessage[] }, emit: Emit
           if (b.type === 'web_search_tool_result') {
             if (Array.isArray(b.content)) {
               for (const r of b.content) results.set(r.url, { title: r.title, pageAge: r.page_age ?? null });
-              emit({ type: 'status', kind: 'search', id: b.tool_use_id, text: `${b.content.length} results`, done: true });
+              const query = queryById.get(b.tool_use_id);
+              emit({ type: 'status', kind: 'search', id: b.tool_use_id, text: `${query ? `“${query}” · ` : ''}${b.content.length} results`, done: true });
             } else {
               emit({ type: 'status', kind: 'search', id: b.tool_use_id, text: `Search failed (${b.content.error_code})`, done: true });
             }
@@ -241,8 +243,10 @@ async function runAnswer(args: TurnArgs & { history: ChatMessage[] }, emit: Emit
           if (block?.type === 'server_tool_use') {
             const query = parseQuery(block.json);
             if (query) {
+              const id = toolUseId(stream, event.index);
+              if (id) queryById.set(id, query);
               searches.push(query);
-              emit({ type: 'status', kind: 'search', id: toolUseId(stream, event.index), text: `Searching: “${query}”` });
+              emit({ type: 'status', kind: 'search', id, text: `Searching: “${query}”` });
             }
           }
         }

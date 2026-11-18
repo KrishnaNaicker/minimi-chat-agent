@@ -6,7 +6,7 @@ import { dayLabel, localDay, utcBounds, type DayRange, type Temporal } from './t
 // a personal ledger is small, and exact dates matter more than fuzzy similarity.
 
 const PAST_REFERENCE =
-  /\b(i|we)\s+(asked|shortlisted|discussed|talked|looked|compared|mentioned|said|chose|picked|decided)\b|\byou\s+(said|told|recommended|suggested|answered|mentioned|found)\b|\b(your|the)\s+(answer|reply|recommendation)\b|\bsince then\b|\blast time\b|\bearlier\b|\bremind me\b|\bstill (correct|true|accurate|valid|right|the case)\b/i;
+  /\b(i|we)\s+(asked|shortlisted|discussed|talked|looked|compared|mentioned|said|chose|picked|decided)\b|\byou\s+(said|told|recommend(ed)?|suggest(ed)?|answer(ed)?|mention(ed)?|found|pick(ed)?)\b|\b(your|the)\s+(answer|reply|recommendation)\b|\bsince then\b|\blast time\b|\bearlier\b|\bremind me\b|\bstill (correct|true|accurate|valid|right|the case)\b/i;
 
 const STOPWORDS = new Set(
   ('the a an and or but if of to in on at for from by with about into over is are was were be been being do does did done ' +
@@ -15,14 +15,15 @@ const STOPWORDS = new Set(
     'ask asked tell told said say says still correct true today now since changed change changes anything something ' +
     'monday tuesday wednesday thursday friday saturday sunday yesterday week weeks month months day days ago last ' +
     'january february march april may june july august september october november december jan feb mar apr jun jul aug sep sept oct nov dec ' +
-    'answer question please thanks hey hi big shipped').split(' '),
+    'answer question please thanks hey hi big shipped earlier recommend suggest').split(' '),
 );
 
 export function keywords(text: string): Set<string> {
   const out = new Set<string>();
   for (const raw of text.toLowerCase().match(/[a-z][a-z0-9+.-]*[a-z0-9]|[a-z]/g) ?? []) {
-    const w = raw.replace(/(ies)$/, 'y').replace(/(?<!s)s$/, '');
-    if (w.length >= 3 && !STOPWORDS.has(w) && !/^\d+$/.test(w)) out.add(w);
+    // Crude stemming, so "hosting" matches "host" and "tools" matches "tool".
+    const w = raw.replace(/ies$/, 'y').replace(/(?<!s)s$/, '').replace(/(?<=.{3})(ing|ed|e)$/, '');
+    if (w.length >= 3 && !STOPWORDS.has(raw) && !STOPWORDS.has(w) && !/^\d+$/.test(w)) out.add(w);
   }
   return out;
 }
