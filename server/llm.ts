@@ -44,7 +44,7 @@ export function friendlyError(err: unknown): { message: string; code: string } {
     const detail = (err.error as { error?: { message?: string } } | undefined)?.error?.message ?? '';
     if (/web.?search/i.test(detail))
       return {
-        message: 'Web search is not enabled for this Anthropic organization. Turn it on in the Claude Console (Settings → Privacy / web search), then retry.',
+        message: 'Web search is not enabled for this Anthropic organization. An admin can turn it on in the Claude Console organization settings; then retry.',
         code: 'web_search_disabled',
       };
     if (err.status === 529 || err.status === 503) return { message: 'Claude is overloaded right now. Try again in a moment.', code: 'overloaded' };
