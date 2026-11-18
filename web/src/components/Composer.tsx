@@ -48,7 +48,7 @@ export function Composer({ busy, onSend, onStop, focusKey }: Props) {
             }
           }}
           placeholder="Ask anything, or ask whether an old answer still holds…"
-          className="scroll-thin max-h-[200px] flex-1 resize-none bg-transparent py-2 text-[15px] leading-relaxed outline-none placeholder:text-ink-3 focus-visible:outline-none"
+          className="scroll-thin max-h-[200px] flex-1 resize-none bg-transparent py-2 text-[15px] leading-relaxed outline-none placeholder:text-ink-3"
         />
         {busy ? (
           <button
