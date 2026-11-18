@@ -64,7 +64,7 @@ export interface ConversationSummary {
 // Server-sent events streamed by POST /api/chat
 export type StreamEvent =
   | { type: 'start'; conversationId: string; userMessageId: string }
-  | { type: 'status'; kind: 'time' | 'recall' | 'search' | 'recheck' | 'write'; text: string; done?: boolean; id?: string }
+  | { type: 'status'; kind: 'time' | 'recall' | 'search' | 'recheck'; text: string; done?: boolean; id?: string }
   | { type: 'text'; text: string }
   | { type: 'sources'; sources: Source[] }
   | { type: 'recheck'; result: RecheckResult }

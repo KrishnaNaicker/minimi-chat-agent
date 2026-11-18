@@ -55,7 +55,7 @@ app.post('/api/chat', async (c) => {
   });
 });
 
-const port = Number(process.env.PORT ?? 8787);
+const port = Number(process.env.API_PORT ?? 8787);
 serve({ fetch: app.fetch, port }, () => {
   console.log(`minimi API on http://localhost:${port}  (model: ${MODEL}, key: ${hasKey() ? 'present' : 'MISSING'})`);
 });

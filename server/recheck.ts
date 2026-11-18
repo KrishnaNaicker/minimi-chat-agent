@@ -21,11 +21,11 @@ const SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['claim_id', 'status', 'new_value', 'note', 'source_urls'],
+        required: ['claim_id', 'current_value', 'status', 'note', 'source_urls'],
         properties: {
           claim_id: { type: 'integer' },
+          current_value: { type: ['string', 'null'] },
           status: { type: 'string', enum: ['same', 'changed', 'unknown'] },
-          new_value: { type: ['string', 'null'] },
           note: { type: ['string', 'null'] },
           source_urls: { type: 'array', items: { type: 'string' } },
         },
@@ -36,7 +36,7 @@ const SCHEMA = {
 } as const;
 
 interface EntityVerdict {
-  rows: { claim_id: number; status: RecheckRow['status']; new_value: string | null; note: string | null; source_urls: string[] }[];
+  rows: { claim_id: number; current_value: string | null; status: RecheckRow['status']; note: string | null; source_urls: string[] }[];
   news: string;
 }
 
@@ -44,6 +44,20 @@ export interface RecheckProgress {
   entity: string;
   state: 'checking' | 'done' | 'failed';
   changed?: number;
+}
+
+/** First money amount in a string, e.g. "$1,500 one-time" → 1500. */
+function firstAmount(text: string | null): number | null {
+  const m = text?.match(/[$€£]\s?(\d[\d,]*(?:\.\d+)?)/);
+  return m ? Number(m[1]!.replace(/,/g, '')) : null;
+}
+
+/** Small models sometimes say "same" while quoting a different price. Trust the numbers. */
+function reconcile(status: RecheckRow['status'], oldValue: string, current: string | null): RecheckRow['status'] {
+  const before = firstAmount(oldValue);
+  const now = firstAmount(current);
+  if (status === 'same' && before !== null && now !== null && before !== now) return 'changed';
+  return status;
 }
 
 /** Run `fn` over `items` with at most `limit` in flight. Never rejects: failures come back as Error. */
@@ -72,7 +86,7 @@ async function checkEntity(entity: string, claims: Claim[], today: string, signa
     max_tokens: 2000,
     thinking: { type: 'disabled' },
     system: RECHECK_PROMPT,
-    tools: [webSearchTool(FAST_MODEL, 2)],
+    tools: [webSearchTool(FAST_MODEL, 3)],
     output_config: { format: { type: 'json_schema', schema: SCHEMA } } as Anthropic.OutputConfig,
     messages: [{ role: 'user', content: `Today is ${today}. Entity: ${entity}\nClaims recorded on or after ${since}:\n${list}` }],
   };
@@ -126,19 +140,21 @@ export async function recheckClaims(
     const r = results[i];
     const ok = r && !(r instanceof Error) ? r : null;
     if (r instanceof Error) console.warn(`[recheck] ${entity} failed:`, r.message);
-    if (ok?.verdict.news.trim()) news.push({ entity, text: ok.verdict.news.trim() });
+    const update = ok?.verdict.news.trim() ?? '';
+    if (update && !/^(no|none|nothing|n\/a)\b/i.test(update)) news.push({ entity, text: update });
     for (const c of entityClaims) {
       const v = ok?.verdict.rows.find((x) => x.claim_id === c.id);
       const cited = (v?.source_urls ?? []).filter((u) => ok?.found.has(u));
       const fallback = ok ? [...ok.found.keys()].slice(0, 2) : [];
+      const status = v ? reconcile(v.status, c.value, v.current_value) : 'unknown';
       rows.push({
         entity,
         attribute: c.attribute,
         oldValue: c.value,
         oldAsOf: c.asOf,
         oldSource: c.sourceUrl,
-        status: v?.status ?? 'unknown',
-        newValue: v?.status === 'changed' ? v.new_value : v?.status === 'same' ? c.value : null,
+        status,
+        newValue: status === 'unknown' ? null : (v?.current_value ?? c.value),
         note: v?.note ?? (r instanceof Error ? 'Check failed' : null),
         newSources: (cited.length ? cited : fallback).map((url) => ({ url, title: ok?.found.get(url) ?? url })),
       });

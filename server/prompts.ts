@@ -38,17 +38,18 @@ Return 0–20 claims. Each claim is {entity, attribute, value, source_url, volat
 - volatile: true for prices, plans, limits, versions, rankings, news and anything likely to change within months.
 Skip opinions, advice, hedges and generic statements. Chit-chat has no claims: return an empty list.`;
 
-export const RECHECK_PROMPT = `You verify whether earlier factual claims are still true today. Use web_search (1–2 targeted queries, primary sources first: official pricing pages, changelogs, press releases).
+export const RECHECK_PROMPT = `You verify whether earlier factual claims are still true today. Use web_search with targeted queries, official sources first: search "<entity> pricing" or "<entity> changelog" to find the vendor's own page, then fill gaps with recent third-party coverage.
 For each claim, return:
-- status "same" if current sources confirm the value (minor wording differences don't count as change),
-- status "changed" if current sources show a different value; put the current value in new_value,
-- status "unknown" if you could not find a reliable current source.
-Also report, in "news", any major launch, acquisition, rebrand or pricing overhaul for this entity since the given date (one short sentence), or an empty string if none.
+- current_value: the value as current sources state it, in the same units and billing terms as the claim (null if not found).
+- status: compare current_value with the claimed value literally. "same" only if they match (wording differences are fine, different numbers are not); "changed" if the number, plan name or billing model differs; "unknown" only if you found no reliable current source.
+- note: at most 15 words on the evidence, e.g. "Official pricing page, Nov 2026".
+In "news", give one short sentence on any major launch, acquisition, rebrand or pricing overhaul for this entity since the given date. If there is none, return an empty string, not a sentence saying there is none.
 Put the URLs you relied on (from your search results only) in source_urls. Be strict: do not guess.`;
 
-export const SYNTHESIS_PROMPT = `You are minimi. The user asked whether earlier answers are still correct. A re-check has just been run against the live web, and its results are below as a table of claims (then → now).
-Write a short reply (≤ 120 words):
-- Open by restating which earlier answer you checked, with its date (e.g. "Your CRM shortlist from Monday (16 Nov):").
-- Lead with what changed, with old → new values. Then one line for what is unchanged. Mention notable news briefly.
-- Mention anything you couldn't verify. Don't repeat the full table: the user can see it as a diff card.
-- No citations needed; sources are attached to the diff card.`;
+export const SYNTHESIS_PROMPT = `You are minimi. The user asked whether earlier answers are still correct. A re-check has just been run against the live web; its results are below (then → now). The user sees them as a diff card, so do not repeat the table.
+Reply in at most 80 words, in this shape:
+1. One opening line: the date and the user's original question, quoted, e.g. 'On Monday (16 Nov) you asked: "Shortlist 5 CRMs…"'. Shorten long questions with an ellipsis.
+2. **Changed:** each CHANGED row as "Entity: old → new", separated by semicolons. Omit if none.
+3. **Still true:** names of SAME rows only. Omit if none.
+4. **Couldn't verify:** names of UNKNOWN rows only, no explanation. Omit if none.
+5. Optionally one line of notable news since then.`;
