@@ -30,7 +30,7 @@ const RECHECK_INTENT =
 
 export async function chat(input: ChatInput, emit: Emit, signal: AbortSignal): Promise<void> {
   const now = input.now && !Number.isNaN(Date.parse(input.now)) ? new Date(input.now) : new Date();
-  const temporal = resolveTemporal(input.text, now, input.timeZone);
+  const resolved = resolveTemporal(input.text, now, input.timeZone);
 
   const conversationId =
     input.conversationId && conversationExists(input.conversationId)
@@ -40,11 +40,15 @@ export async function chat(input: ChatInput, emit: Emit, signal: AbortSignal): P
   const userMessage = saveMessage({ conversationId, role: 'user', content: input.text });
   emit({ type: 'start', conversationId, userMessageId: userMessage.id });
 
+  const memory = input.recheckMessageId ? forcedRecall(input.recheckMessageId) : recall(input.text, resolved);
+  // If recall matched another reading of an ambiguous date, that's the date we restate.
+  const matched = memory.turns[0]?.matchedDate;
+  const temporal: Temporal = matched
+    ? { ...resolved, refs: resolved.refs.map((r, i) => (i === 0 ? { ...r, ...matched } : r)) }
+    : resolved;
   for (const ref of temporal.refs) {
     emit({ type: 'status', kind: 'time', text: `“${ref.text}” → ${ref.label}`, done: true });
   }
-
-  const memory = input.recheckMessageId ? forcedRecall(input.recheckMessageId) : recall(input.text, temporal);
   reportRecall(memory, emit);
 
   const wantsRecheck = Boolean(input.recheckMessageId) || RECHECK_INTENT.test(input.text);
@@ -110,6 +114,10 @@ function recallBlock(memory: Recall, temporal: Temporal): string | null {
         lines.push(`Sources: ${t.sources.slice(0, 6).map((s) => `${s.title} <${s.url}> (retrieved ${stamp(s.retrievedAt, timeZone, today)})`).join('; ')}`);
       }
     }
+    const first = memory.turns[0];
+    if (first && temporal.sinceThen) {
+      lines.push('', `“Since then” = from ${stamp(first.askedAt, timeZone, today)} until now.`);
+    }
     if (memory.turns.length === 0 && memory.window) {
       lines.push(`The ledger has NO conversation on ${memory.window.label}.`);
       if (memory.nearest.length) {
@@ -123,13 +131,33 @@ function recallBlock(memory: Recall, temporal: Temporal): string | null {
   return lines.length ? lines.join('\n') : null;
 }
 
-/** Stored history → API messages. Text only; merges same-role neighbours left by failed turns. */
+/** Receipts for recent answers in this conversation, supplied by the orchestrator in the
+ *  current turn. The model trusts orchestrator context; it rightly distrusts tool-looking
+ *  text inside its own past messages. Follow-ups ("which is cheapest now?") need these values. */
+function receiptsBlock(history: ChatMessage[], temporal: Temporal): string | null {
+  const recent = history.filter((m) => m.role === 'assistant' && (m.recheck || m.sources.length > 0)).slice(-2);
+  if (recent.length === 0) return null;
+  const lines = ['RECEIPTS FOR EARLIER ANSWERS IN THIS CONVERSATION (from the ledger; these came from real web searches):'];
+  for (const m of recent) {
+    const when = stamp(m.createdAt, temporal.timeZone, temporal.today);
+    if (m.recheck) {
+      lines.push(`- Your answer at ${when} was a live re-check (${m.recheck.searches} searches). Then → now:`);
+      for (const r of m.recheck.rows) lines.push(`  · ${r.entity} · ${r.attribute}: then ${r.oldValue} → ${r.status}${r.newValue ? `; now ${r.newValue}` : ''}`);
+    }
+    if (m.sources.length) lines.push(`- Your answer at ${when} used: ${m.sources.slice(0, 8).map((x) => x.url).join(', ')}`);
+  }
+  return lines.join('\n');
+}
+
+/** Stored history → API messages. Text only; skips empty turns and merges same-role neighbours left by failed turns. */
 function toApiHistory(history: ChatMessage[]): Anthropic.MessageParam[] {
   const out: Anthropic.MessageParam[] = [];
   for (const m of history.slice(-HISTORY_MESSAGES)) {
+    const text = m.content.trim();
+    if (!text) continue;
     const last = out[out.length - 1];
-    if (last && last.role === m.role) last.content = `${last.content as string}\n\n${m.content}`;
-    else out.push({ role: m.role, content: m.content });
+    if (last && last.role === m.role) last.content = `${last.content as string}\n\n${text}`;
+    else out.push({ role: m.role, content: text });
   }
   while (out[0]?.role === 'assistant') out.shift();
   return out;
@@ -157,7 +185,7 @@ async function runAnswer(args: TurnArgs & { history: ChatMessage[] }, emit: Emit
   const cited = new Map<string, Source>(); // url → numbered source, in citation order
   const retrievedAt = new Date().toISOString();
 
-  const context = recallBlock(memory, temporal);
+  const context = [recallBlock(memory, temporal), receiptsBlock(history, temporal)].filter(Boolean).join('\n\n');
   const userContent: Anthropic.ContentBlockParam[] = [
     ...(context ? [{ type: 'text' as const, text: `<turn_context>\n${context}\n</turn_context>` }] : []),
     { type: 'text', text: input.text },
@@ -207,11 +235,11 @@ async function runAnswer(args: TurnArgs & { history: ChatMessage[] }, emit: Emit
         { signal },
       );
 
-      const blocks = new Map<number, { type: string; json: string; cites: number[] }>();
+      const blocks = new Map<number, { type: string; name?: string; input?: unknown; json: string; cites: number[] }>();
       for await (const event of stream) {
         if (event.type === 'content_block_start') {
           const b = event.content_block;
-          blocks.set(event.index, { type: b.type, json: '', cites: [] });
+          blocks.set(event.index, b.type === 'server_tool_use' ? { type: b.type, name: b.name, input: b.input, json: '', cites: [] } : { type: b.type, json: '', cites: [] });
           if (b.type === 'server_tool_use' && holding) held = ''; // it was filler before a search
           else if (b.type === 'text' && held) release();
           if (b.type === 'web_search_tool_result') {
@@ -240,8 +268,10 @@ async function runAnswer(args: TurnArgs & { history: ChatMessage[] }, emit: Emit
         } else if (event.type === 'content_block_stop') {
           const block = blocks.get(event.index);
           if (block?.type === 'text' && block.cites.length) out(block.cites.map((n) => `[${n}]`).join(''));
-          if (block?.type === 'server_tool_use') {
-            const query = parseQuery(block.json);
+          // Haiku streams the query as JSON deltas; with dynamic filtering (Sonnet/Opus) code
+          // execution calls web_search and the input arrives whole in the block start.
+          if (block?.type === 'server_tool_use' && block.name === 'web_search') {
+            const query = parseQuery(block.json) ?? queryOf(block.input);
             if (query) {
               const id = toolUseId(stream, event.index);
               if (id) queryById.set(id, query);
@@ -266,6 +296,7 @@ async function runAnswer(args: TurnArgs & { history: ChatMessage[] }, emit: Emit
   }
 
   if (held) release();
+  if (!answer.trim()) return; // stopped before any text: nothing worth keeping as a receipt
   const sources = sourceList();
   const metrics: Metrics = {
     totalMs: Date.now() - started, firstTokenMs, searches: searches.length, sources: sources.length, model: MODEL,
@@ -277,10 +308,14 @@ async function runAnswer(args: TurnArgs & { history: ChatMessage[] }, emit: Emit
   emit({ type: 'done', message: saved });
 }
 
+function queryOf(input: unknown): string | null {
+  const q = (input as { query?: unknown } | null)?.query;
+  return typeof q === 'string' ? q : null;
+}
+
 function parseQuery(json: string): string | null {
   try {
-    const input = JSON.parse(json) as { query?: unknown };
-    return typeof input.query === 'string' ? input.query : null;
+    return queryOf(JSON.parse(json));
   } catch {
     return null;
   }

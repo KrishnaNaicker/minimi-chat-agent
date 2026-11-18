@@ -46,17 +46,17 @@ export interface RecheckProgress {
   changed?: number;
 }
 
-/** First money amount in a string, e.g. "$1,500 one-time" → 1500. */
-function firstAmount(text: string | null): number | null {
-  const m = text?.match(/[$€£]\s?(\d[\d,]*(?:\.\d+)?)/);
-  return m ? Number(m[1]!.replace(/,/g, '')) : null;
+/** Money amounts in a string, e.g. "$20/month ($17 billed annually)" → [20, 17]. */
+function amounts(text: string | null): number[] {
+  return [...(text ?? '').matchAll(/[$€£]\s?(\d[\d,]*(?:\.\d+)?)/g)].map((m) => Number(m[1]!.replace(/,/g, '')));
 }
 
-/** Small models sometimes say "same" while quoting a different price. Trust the numbers. */
+/** Small models sometimes say "same" while quoting a different price. If the old
+ *  headline amount appears nowhere in the current value, trust the numbers. */
 function reconcile(status: RecheckRow['status'], oldValue: string, current: string | null): RecheckRow['status'] {
-  const before = firstAmount(oldValue);
-  const now = firstAmount(current);
-  if (status === 'same' && before !== null && now !== null && before !== now) return 'changed';
+  const [before] = amounts(oldValue);
+  const now = amounts(current);
+  if (status === 'same' && before !== undefined && now.length > 0 && !now.includes(before)) return 'changed';
   return status;
 }
 

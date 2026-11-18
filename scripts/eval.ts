@@ -1,7 +1,8 @@
 // npm run eval — a small, honest eval.
 // Part 1: the date resolver against fixed clocks and literal expected dates (no LLM).
-// Part 2: 8 live agent cases against a freshly seeded copy of the ledger (data/eval.db),
-//         checking date resolution, recall hit/miss, whether a search happened, and latency.
+// Part 2: recall against a freshly seeded copy of the ledger (data/eval.db), no LLM.
+// Part 3: 8 live agent cases on that ledger, checking date resolution, recall hit/miss,
+//         whether a search happened, and latency.
 
 import { rmSync } from 'node:fs';
 
@@ -9,6 +10,7 @@ process.env.DB_PATH = 'data/eval.db';
 for (const f of ['', '-wal', '-shm']) rmSync(`data/eval.db${f}`, { force: true }); // start from a clean ledger
 await import('../server/env.js');
 const { resolveTemporal } = await import('../server/temporal.js');
+const { recall } = await import('../server/recall.js');
 const { hasKey } = await import('../server/llm.js');
 const { chat } = await import('../server/agent.js');
 const { seed, EXACT_DATE_OFFSET_DAYS } = await import('./seed.js');
@@ -44,13 +46,31 @@ for (const c of temporalCases) {
 }
 const temporalPassed = temporalCases.length - failures;
 
-// ── Part 2: live agent cases ───────────────────────────────────────────────
+// ── Part 2: recall against the seeded ledger (no LLM) ─────────────────────
+const dates = seed();
+const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+const tomorrow = new Date(Date.now() + 86_400_000);
+const recallCases: { text: string; now: Date; expect: string | null; note: string }[] = [
+  { text: 'Last Tuesday I asked you about Postgres hosting. Has any pricing changed since then?', now: tomorrow, expect: dates.lastTuesday, note: 'asked the day after seeding' },
+  { text: 'What happened in AI news yesterday?', now: new Date(), expect: null, note: 'dated world question: no recall' },
+  { text: 'On Monday we shortlisted 5 CRM tools. Any changes?', now: new Date(), expect: dates.monday, note: 'topical match in window' },
+];
+let recallFailures = 0;
+console.log('\nRecall (seeded ledger, no LLM)\n');
+for (const c of recallCases) {
+  const r = recall(c.text, resolveTemporal(c.text, c.now, tz));
+  const got = r.triggered ? (r.turns[0]?.matchedDate?.from ?? 'miss') : null;
+  const ok = got === c.expect;
+  if (!ok) recallFailures++;
+  console.log(`  ${ok ? green('PASS') : red('FAIL')}  ${pad(`"${c.text}"`, 40)} ${pad(c.note, 32)} → ${got ?? 'not triggered'}${ok ? '' : red(`  (expected ${c.expect ?? 'not triggered'})`)}`);
+}
+failures += recallFailures;
+
+// ── Part 3: live agent cases ───────────────────────────────────────────────
 if (!hasKey()) {
   console.log(red('\nANTHROPIC_API_KEY is not set; skipping live agent cases.'));
   process.exit(failures ? 1 : 0);
 }
-
-const dates = seed();
 const exactLabel = new Date(`${dates.exact}T00:00:00Z`).toLocaleDateString('en-GB', { timeZone: 'UTC', day: 'numeric', month: 'long' });
 
 interface Case {
@@ -92,7 +112,7 @@ const cases: Case[] = [
     recall: 'hit', search: null, recheck: false, maxTotalMs: 15_000, answerMatches: /(supabase|neon)/i,
   },
   { name: 'Chit-chat, no search', text: "hey, how's your day going?", recall: 'none', search: false, recheck: false, maxTotalMs: 5_000 },
-  { name: 'Stable knowledge, no search', text: 'In two sentences: what is the difference between TCP and UDP?', recall: 'none', search: false, recheck: false, maxTotalMs: 8_000 },
+  { name: 'Dated world question', text: 'What were the biggest AI news stories yesterday?', recall: 'none', search: true, recheck: false, maxTotalMs: 15_000 },
   { name: 'Current events, searches', text: 'What is the latest stable version of Node.js right now?', recall: 'none', search: true, recheck: false, maxTotalMs: 15_000 },
 ];
 
@@ -103,7 +123,7 @@ console.log(`\nAgent cases (seeded ledger: Monday=${dates.monday}, last Tuesday=
 for (const c of cases) {
   const events: StreamEvent[] = [];
   const started = Date.now();
-  await chat({ text: c.text, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, now: new Date().toISOString() }, (e) => events.push(e), new AbortController().signal);
+  await chat({ text: c.text, timeZone: tz, now: new Date().toISOString() }, (e) => events.push(e), new AbortController().signal);
   const total = Date.now() - started;
 
   const done = events.find((e): e is Extract<StreamEvent, { type: 'done' }> => e.type === 'done');
@@ -150,6 +170,7 @@ const fanouts = rows.filter((r) => r.fanoutMs !== null).map((r) => r.fanoutMs!);
 console.log(`
 ${dim('Summary')}
   temporal resolver      ${temporalPassed}/${temporalCases.length} pass
+  recall                 ${recallCases.length - recallFailures}/${recallCases.length} pass
   agent cases            ${passed}/${rows.length} pass
   median first token     ${(median(ttfts) / 1000).toFixed(2)}s  ${dim('(non-re-check answers)')}
   re-check fan-out       ${fanouts.map((f) => `${(f / 1000).toFixed(1)}s`).join(', ')}  ${dim('(parallel per-entity verification)')}

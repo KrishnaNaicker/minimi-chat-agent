@@ -5,8 +5,10 @@ import { dayLabel, localDay, utcBounds, type DayRange, type Temporal } from './t
 // back, using the resolved dates and simple keyword overlap. No embeddings —
 // a personal ledger is small, and exact dates matter more than fuzzy similarity.
 
+// Recall is triggered by talk about the conversation itself, not by a date alone:
+// "what happened in AI news yesterday?" is a question about the world.
 const PAST_REFERENCE =
-  /\b(i|we)\s+(asked|shortlisted|discussed|talked|looked|compared|mentioned|said|chose|picked|decided)\b|\byou\s+(said|told|recommend(ed)?|suggest(ed)?|answer(ed)?|mention(ed)?|found|pick(ed)?)\b|\b(your|the)\s+(answer|reply|recommendation)\b|\bsince then\b|\blast time\b|\bearlier\b|\bremind me\b|\bstill (correct|true|accurate|valid|right|the case)\b/i;
+  /\b(i|we)\s+(ask|asked|shortlist|shortlisted|discuss|discussed|talk|talked|look|looked|compare|compared|mention|mentioned|said|chose|choose|pick|picked|decide|decided)\b|\byou\s+(said|told|recommend(ed)?|suggest(ed)?|answer(ed)?|mention(ed)?|found|pick(ed)?)\b|\b(your|the)\s+(answer|reply|recommendation)\b|\bsince then\b|\blast time\b|\bearlier\b|\bremind me\b|\bstill (correct|true|accurate|valid|right|the case)\b/i;
 
 const STOPWORDS = new Set(
   ('the a an and or but if of to in on at for from by with about into over is are was were be been being do does did done ' +
@@ -54,13 +56,9 @@ function topicScore(query: Set<string>, turn: Turn, claims: Claim[]): number {
   return score;
 }
 
-export function shouldRecall(text: string, temporal: Temporal): boolean {
-  return temporal.refs.length > 0 || PAST_REFERENCE.test(text);
-}
-
 export function recall(text: string, temporal: Temporal): Recall {
   const empty: Recall = { triggered: false, turns: [], window: null, nearest: [], ledgerEmpty: false };
-  if (!shouldRecall(text, temporal)) return empty;
+  if (!PAST_REFERENCE.test(text)) return empty;
 
   const turns = allTurns().filter((t) => t.kind === 'answer');
   if (turns.length === 0) return { ...empty, triggered: true, ledgerEmpty: true };
@@ -74,35 +72,38 @@ export function recall(text: string, temporal: Temporal): Recall {
     const claims = claimsByTurn.get(t.answerId) ?? [];
     return { ...t, claims, score: topicScore(query, t, claims), matchedDate: null };
   });
+  const best = (list: RecalledTurn[]) => [...list].sort((a, b) => b.score - a.score || b.askedAt.localeCompare(a.askedAt)).slice(0, 3);
 
-  // 1. The user named a date: try each reading in order; the first with hits wins.
+  // 1. The user named a date. Try every reading ("last Tuesday" can mean two days)
+  //    for a topical match first; only a topic-less question ("what did I ask you on
+  //    3 Nov?") may take whatever is in the window.
   const ref = temporal.refs[0];
   if (ref) {
-    for (const reading of [ref, ...ref.alternatives]) {
+    const windows = [ref, ...ref.alternatives].map((reading) => {
       const [start, end] = utcBounds(reading, temporal.timeZone);
-      const hits = scored
+      const matchedDate = { from: reading.from, to: reading.to, label: reading.label };
+      return scored
         .filter((t) => t.askedAt >= start.toISOString() && t.askedAt < end.toISOString())
-        .map((t) => ({ ...t, matchedDate: { from: reading.from, to: reading.to, label: reading.label } }))
-        .sort((a, b) => b.score - a.score || b.askedAt.localeCompare(a.askedAt));
-      // Within the window, prefer topical hits; if the question has no topic words, take them all.
-      const topical = hits.filter((h) => h.score > 0);
-      const chosen = query.size > 0 && topical.length > 0 ? topical : hits;
-      if (chosen.length > 0) return { triggered: true, turns: chosen.slice(0, 3), window: ref, nearest: [], ledgerEmpty: false };
-    }
+        .map((t) => ({ ...t, matchedDate }));
+    });
+    const topical = windows.map((hits) => hits.filter((h) => h.score > 0)).find((hits) => hits.length > 0);
+    const anyHits = query.size === 0 ? windows.find((hits) => hits.length > 0) : undefined;
+    const chosen = topical ?? anyHits;
+    if (chosen) return { triggered: true, turns: best(chosen), window: ref, nearest: [], ledgerEmpty: false };
+
     // Nothing on that date: offer the closest days and the best topical match instead of inventing one.
     const [start] = utcBounds(ref, temporal.timeZone);
     const byDistance = [...scored].sort(
       (a, b) => Math.abs(Date.parse(a.askedAt) - start.getTime()) - Math.abs(Date.parse(b.askedAt) - start.getTime()),
     );
     const nearest = byDistance.slice(0, 2);
-    const bestTopic = [...scored].sort((a, b) => b.score - a.score)[0];
+    const bestTopic = best(scored)[0];
     if (bestTopic && bestTopic.score >= 2 && !nearest.includes(bestTopic)) nearest.push(bestTopic);
     return { triggered: true, turns: [], window: ref, nearest, ledgerEmpty: false };
   }
 
   // 2. No date, but a reference to the past ("you said…", "the CRM tools we compared"): topic only.
-  const hits = scored.filter((t) => t.score >= 2).sort((a, b) => b.score - a.score || b.askedAt.localeCompare(a.askedAt));
-  return { triggered: true, turns: hits.slice(0, 3), window: null, nearest: [], ledgerEmpty: false };
+  return { triggered: true, turns: best(scored.filter((t) => t.score >= 2)), window: null, nearest: [], ledgerEmpty: false };
 }
 
 /** "Mon 16 Nov, 14:05" in the user's zone. */

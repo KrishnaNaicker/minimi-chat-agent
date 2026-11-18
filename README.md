@@ -6,7 +6,7 @@ One tool (web search), one API key, TypeScript end to end.
 
 ## Quickstart (60 seconds)
 
-Requires **Node 22.12+** (see `.nvmrc`).
+Requires **Node 22.12+** (see `.nvmrc`; developed on Node 26).
 
 ```bash
 npm install
@@ -16,6 +16,10 @@ npm run dev                 # http://localhost:5173
 ```
 
 Without a key the app still starts and shows an "Add ANTHROPIC_API_KEY to .env" screen.
+
+The demo seed is dated relative to the day you run it ("Monday", "last Tuesday", 15 days ago), so re-run `npm run seed` on the day you demo.
+
+The demo seed is dated relative to the day you run it ("Monday", "last Tuesday", 15 days ago). Re-run `npm run seed` on the day you demo.
 
 ## What to try
 
@@ -38,7 +42,7 @@ Every answer shows its metrics underneath: total time, time to first token, sear
 | `npm run dev` | API (Hono, port 8787) + web (Vite, port 5173) with hot reload |
 | `npm run seed` | Insert demo conversations, flagged "demo seed" in the UI |
 | `npm run seed:reset` | Remove the demo conversations |
-| `npm run eval` | Date-resolver checks + 8 live agent cases on a separate DB copy, prints a pass/fail table |
+| `npm run eval` | Date-resolver and recall checks (no LLM), then 8 live agent cases on a separate DB copy; prints a pass/fail table |
 | `npm run typecheck` | Strict TypeScript over server, scripts and web |
 | `npm start` | API only, no watch |
 
